@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Depth Lab · stimulus gallery</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  body { margin: 0; padding: 16px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; }
+  figure { margin: 0; background: #fff; padding: 8px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  figure canvas { width: 100%; height: auto; display: block; } figcaption { font-size: 13px; color: #5b6475; margin-top: 6px; }
+  h1 { font-size: 1.4em; } .pixelated { image-rendering: pixelated; }
+</style>
+<script src="js/config.js"></script><script src="js/common.js"></script><script src="js/stim.js"></script>
+</head>
+<body>
+<h1>Depth Lab: every stimulus, for previewing and for the slides</h1>
+<p class="small">Instructor page. Students do not need it. Animated panels loop.</p>
+<div class="grid" id="g"></div>
+<script>
+const g = document.getElementById("g"), anims = [];
+const add = (id, w, h, cap, fn, anim, pix) => {
+  const f = document.createElement("figure");
+  f.innerHTML = `<canvas id="${id}" width="${w}" height="${h}" class="${pix ? "pixelated" : ""}"></canvas><figcaption>${cap}</figcaption>`;
+  g.appendChild(f);
+  const ctx = document.getElementById(id).getContext("2d"), st = {};
+  if (anim) anims.push((t) => fn(ctx, t, st)); else fn(ctx, st);
+};
+const B = "#2f6fd6", O = "#e67e22";
+add("size", 640, 420, "1A size alone", (c) => DL.stim.scene(c, { ground: true, objs: [{ kind: "ball", x: 190, base: 300, r: 36, col: B, label: "A" }, { kind: "ball", x: 450, base: 300, r: 22, col: O, label: "B" }] }));
+add("height", 640, 420, "1A height in the field alone", (c) => DL.stim.scene(c, { ground: true, objs: [{ kind: "ball", x: 450, base: 228, r: 26, col: O, label: "B" }, { kind: "ball", x: 190, base: 380, r: 26, col: B, label: "A" }] }));
+add("occ", 640, 420, "1A occlusion alone", (c) => DL.stim.scene(c, { ground: false, objs: [{ kind: "card", x: 352, y: 218, s: 110, col: O, label: "B", labelX: 400 }, { kind: "card", x: 262, y: 200, s: 110, col: B, label: "A", labelX: 222 }] }));
+add("svh", 640, 420, "1A conflict: size vs height", (c) => DL.stim.scene(c, { ground: true, objs: [{ kind: "ball", x: 190, base: 232, r: 38, col: B, label: "A" }, { kind: "ball", x: 450, base: 372, r: 20, col: O, label: "B" }] }));
+add("ovs", 640, 420, "1A conflict: occlusion vs size", (c) => DL.stim.scene(c, { ground: false, objs: [{ kind: "card", x: 352, y: 218, s: 132, col: O, label: "B", labelX: 400 }, { kind: "card", x: 262, y: 200, s: 72, col: B, label: "A", labelX: 222 }] }));
+[90, 270, 180, 0].forEach(a => add("sh" + a, 360, 360, `1B bright side at ${a}&deg;`, (c) => DL.stim.shadedDisc(c, a)));
+add("arr", 600, 300, "1B array", (c) => DL.stim.discArray(c, false));
+add("arrf", 600, 300, "1B array rotated 180&deg;", (c) => DL.stim.discArray(c, true));
+add("boxa", 600, 400, "1C shadow attached (ball recedes)", (c, t) => DL.stim.ballBox(c, t, "attached"), true);
+add("boxh", 600, 400, "1C shadow slides sideways (ball rises)", (c, t) => DL.stim.ballBox(c, t, "horizontal"), true);
+add("gl", 500, 230, "2 glasses check", (c) => DL.stim.glassesCheck(c));
+add("rds", 300, 300, "2 anaglyph RDS: square in front", (c) => { const r = DL.stim.makeRDS("square", 1, 2); DL.stim.drawAnaglyph(c, r.L, r.R); }, false, true);
+add("rdsLR", 640, 300, "2 the two eyes' images of the square (each is just noise)", (c) => {
+  const r = DL.stim.makeRDS("square", 1, 2), N = DL.stim.N, C = DL.stim.CELL;
+  c.fillStyle = "#fff"; c.fillRect(0, 0, 640, 300); c.fillStyle = "#000";
+  [[r.L, 0], [r.R, 340]].forEach(([M, ox]) => { for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (M[y][x]) c.fillRect(ox + x * C, y * C, C, C); });
+}, false, true);
+add("rdsb", 300, 300, "2 anaglyph RDS: circle behind", (c) => { const r = DL.stim.makeRDS("circle", -1, 2); DL.stim.drawAnaglyph(c, r.L, r.R); }, false, true);
+add("rdsf", 640, 330, "2 cross-fusion pair: triangle in front", (c) => { const r = DL.stim.makeRDS("triangle", 1, 2); DL.stim.drawCrossFuse(c, r.L, r.R); }, false, true);
+add("ms", 360, 360, "3A shape from motion (cross)", (c, t, st) => { st.shape = "cross"; DL.stim.motionShape(c, t, st, false); }, true);
+add("ko", 360, 360, "3B object (square, in front)", (c, t, st) => { st.shape = "square"; st.cond = "object"; DL.stim.kineticOcclusion(c, t, st); }, true);
+add("kh", 360, 360, "3B hole (circle, behind)", (c, t, st) => { st.shape = "circle"; st.cond = "hole"; DL.stim.kineticOcclusion(c, t, st); }, true);
+add("cyl", 360, 360, "3C drum, identical dots (ambiguous)", (c, t, st) => { st.omega = 1.1; st.cue = false; DL.stim.cylinder(c, t, st); }, true);
+add("cylc", 360, 360, "3C drum, near dots bigger and darker", (c, t, st) => { st.omega = 1.1; st.cue = true; DL.stim.cylinder(c, t, st); }, true);
+add("cor", 600, 420, "4 corridor, both balls identical (100%)", (c) => DL.stim.corridor(c, { context: "corridor", ref: "near" }, 100));
+add("blank", 600, 420, "4 blank, both balls identical (100%)", (c) => DL.stim.corridor(c, { context: "blank", ref: "near" }, 100));
+const t0 = performance.now();
+const loop = (now) => { anims.forEach(f => f((now - t0) / 1000)); requestAnimationFrame(loop); };
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

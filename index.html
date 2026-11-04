@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Depth Lab · PSYC343 Session 9</title>
+  <link rel="stylesheet" href="lib/jspsych.css">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="lib/jspsych.js"></script>
+  <script src="lib/plugin-html-button-response.js"></script>
+  <script src="lib/plugin-html-keyboard-response.js"></script>
+  <script src="lib/plugin-html-slider-response.js"></script>
+  <script src="lib/plugin-survey-html-form.js"></script>
+  <script src="lib/plugin-call-function.js"></script>
+  <script src="lib/plugin-pipe.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/stim.js"></script>
+  <script src="js/phase1.js"></script>
+  <script src="js/phase2.js"></script>
+  <script src="js/phase3.js"></script>
+  <script src="js/phase4.js"></script>
+</head>
+<body>
+<script>
+  const jsPsych = initJsPsych({
+    show_progress_bar: false,
+    on_finish: () => {
+      const p = DL.state.phase;
+      document.querySelector(".jspsych-display-element").innerHTML = `
+        <div class="results done"><h2>Thank you</h2>
+        <p>Phase ${p} is finished. Look up at the slides.</p>
+        <p class="small">When the next unlock code appears, reload this page (your name and roll number are remembered on this device).</p>
+        <button class="jspsych-btn" onclick="location.reload()">Start the next phase</button></div>`;
+    }
+  });
+  const phases = { 1: P1, 2: P2, 3: P3, 4: P4 };
+  const timeline = [DL.loginTrial()];
+  [1, 2, 3, 4].forEach(k => timeline.push({ timeline: phases[k].timeline(), conditional_function: () => DL.state.phase === k }));
+  jsPsych.run(timeline);
+</script>
+</body>
+</html>
