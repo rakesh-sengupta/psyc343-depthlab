@@ -30,6 +30,8 @@
       document.querySelector(".jspsych-display-element").innerHTML = `
         <div class="results done"><h2>Thank you</h2>
         <p>Phase ${p} is finished. Look up at the slides.</p>
+        ${DL.grade.table(DL.grade.load(DL.state.roll), false)}
+        ${p === 4 ? `<p><b>That was the last phase: the quiz is complete.</b> Your official grade will be on the <a href="grade.html">grade page</a>.</p>` : ""}
         <p class="small">When the next unlock code appears, reload this page (your name and roll number are remembered on this device).</p>
         <button class="jspsych-btn" onclick="location.reload()">Start the next phase</button></div>`;
     }

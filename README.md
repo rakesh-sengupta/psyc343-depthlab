@@ -12,9 +12,26 @@ opens with an **unlock code** on a slide.
 | 3 | `PARALLAX` | Motion | shapes defined only by motion; accretion/deletion (object or hole); rotating dot drum with and without a depth cue |
 | 4 | `PONZO` | Size and distance | match ball sizes in a corridor vs blank background; final 5-question quiz |
 
-Each phase: name + roll number + code → a prediction (ungraded) → trials → scored quiz with
-feedback → **personal results page** with charts → data saved → "look up at the slides".
-Name and roll number are remembered on the device between phases.
+Each phase: name + roll number + code → a prediction (ungraded) → trials → **graded quiz** with
+immediate feedback → **personal results page** with charts and the student's score so far → data saved →
+"look up at the slides". Name and roll number are remembered on the device between phases.
+
+## Automatic grading
+
+The class and the quiz run together. 15 graded questions (Phase 1: 4, Phase 2: 3, Phase 3: 3, Phase 4: 5),
+one mark each, scaled to 10 marks. Only quiz questions are graded; predictions and experiment answers never are.
+Answer options are shuffled per student. Only the first attempt at each phase counts.
+
+- **During class**: each answer is marked at once with an explanation; each results page shows the
+  student's provisional total (phases done on that device).
+- **Official grade**: computed automatically in the Google Sheet (`apps-script/Code.gs`, tab `Grades`,
+  rebuilt after every finished phase). Students look it up at **`grade.html`** with roll number + name.
+- **Release time**: Sheet tab `Settings` → `release_from` (blank = immediately; or e.g. `2026-11-06 18:00`).
+  Also there: `out_of`, optional letter `bands` (e.g. `90:A,80:A-,70:B,60:C,50:D,0:F`) and `override`
+  for manual corrections (e.g. `KREA1003=+1`). Keep `grading` in `js/config.js` consistent with it.
+- The analysis script computes the same gradebook from the full trial data as an independent check.
+- The grade page answers only when roll number and name match. That keeps casual look-ups out but is not
+  strong security; Canvas remains the record of grades.
 
 ## Put it online (GitHub Pages, ~10 minutes)
 
@@ -34,7 +51,7 @@ Edit `js/config.js`:
   link a **private** OSF project, create an experiment, switch *data collection* on, and paste the
   12-character ID. Every finished phase writes one CSV per student to OSF, named
   `S09_P<phase>_<roll>_<name>_<timestamp>.csv`.
-- **`sheets_url`** (optional, live view). Make a Google Sheet → Extensions → Apps Script → paste
+- **`sheets_url`** (needed for automatic grading and the grade page; also gives a live view). Run `setup` once in the Apps Script editor before deploying. Make a Google Sheet → Extensions → Apps Script → paste
   `apps-script/Code.gs` → Deploy as web app (execute as *me*, access *anyone*) → paste the `/exec` URL.
   Each finished phase adds one summary row (quiz score + key results) to a tab per phase, so you can
   show class results live after each phase.
@@ -68,7 +85,7 @@ the first (in-class) attempt is used.
 `rds` (shape, disparity_sign, mode, reported, correct_shape, saw_shape) · `rds_depth` (said, correct) ·
 `motion_shape` (shape, still, reported, correct_shape) · `accretion` (cond, said, correct) ·
 `kde` (omega, cue, said, follows_cue) · `size_match` (context, ref, start, setting) ·
-`prediction` (qid, chosen) · `quiz` (qid, answer, response, correct).
+`prediction` (qid, chosen) · `quiz` (qid, answer = index of the correct option as written, option_order = order shown, chosen_index, correct).
 
 ## Privacy
 

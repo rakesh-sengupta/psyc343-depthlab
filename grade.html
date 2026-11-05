@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Depth Lab · my grade</title>
+<link rel="stylesheet" href="lib/jspsych.css">
+<link rel="stylesheet" href="css/style.css">
+<script src="js/config.js"></script><script src="js/common.js"></script>
+</head>
+<body>
+<div class="gradebox jspsych-content">
+  <h1>My grade</h1>
+  <p class="sub">PSYC343 &middot; Session 9 in-class quiz (Depth Lab)</p>
+  <div class="form">
+    <label>Roll number<input id="roll" autocomplete="off"></label>
+    <label>Full name (as you typed it in class)<input id="name" autocomplete="name"></label>
+  </div>
+  <p style="text-align:center"><button class="jspsych-btn" id="go">Show my grade</button></p>
+  <div id="out"></div>
+  <p class="small">Only the quiz questions are graded, one mark each, first attempt only. Your experiment answers are never marked.
+  Questions about your grade: write to the instructor with your roll number.</p>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+$("roll").value = DL.store.get("roll"); $("name").value = DL.store.get("name");
+const local = (roll) => {
+  const rec = DL.grade.load(roll);
+  return Object.keys(rec).length ? DL.grade.table(rec, false) : "<p class='small'>No record of this roll number on this device.</p>";
+};
+$("go").onclick = async () => {
+  const roll = $("roll").value.trim(), name = $("name").value.trim(), out = $("out");
+  if (!roll || !name) { out.innerHTML = "<p class='warn'>Enter both your roll number and your name.</p>"; return; }
+  if (!CFG.sheets_url) { out.innerHTML = "<p class='warn'>The official grade service is not set up yet.</p>" + local(roll); return; }
+  out.innerHTML = "<p>Looking up&hellip;</p>";
+  try {
+    const url = CFG.sheets_url + "?roll=" + encodeURIComponent(roll) + "&name=" + encodeURIComponent(name);
+    const r = await (await fetch(url)).json();
+    if (r.status === "ok") {
+      const rec = {}; Object.keys(r.phases).forEach(k => { if (r.phases[k] !== null && r.phases[k] !== "") rec[k] = { correct: r.phases[k] }; });
+      const G = Object.assign({}, CFG.grading, { out_of: r.out_of, bands: r.bands || CFG.grading.bands });
+      out.innerHTML = `<p class="big">${r.marks} / ${r.out_of}</p><p><b>${r.correct} / ${r.total}</b> questions correct &middot; ${r.percent}%${r.letter ? " &middot; grade <b>" + r.letter + "</b>" : ""}</p>`
+        + DL.grade.table(rec, true) + (r.note ? `<p class="small">${DL.esc(r.note)}</p>` : "");
+    } else if (r.status === "not_released") {
+      out.innerHTML = `<p class="warn">Grades will be released ${DL.esc(r.release_from)}.</p>` + local(roll);
+    } else {
+      out.innerHTML = `<p class="warn">${DL.esc(r.message || "No record found.")}</p>` + local(roll);
+    }
+  } catch (e) {
+    out.innerHTML = "<p class='warn'>Could not reach the grade service. Your provisional record on this device:</p>" + local(roll);
+  }
+};
+</script>
+</body>
+</html>

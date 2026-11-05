@@ -49,3 +49,12 @@ svg.chart .ax, svg.chart .lab { font-size: 11px; fill: var(--muted); } svg.chart
 svg.chart .ct { font-size: 12px; font-weight: 600; fill: var(--ink); } svg.chart .reft { font-size: 10px; fill: var(--accent); }
 
 @media (max-width: 520px) { .jspsych-content { font-size: 15px; } }
+
+#dl-banner { position: sticky; top: 0; z-index: 10; background: #1d2433; color: #fff; font-size: 13px; padding: 6px 12px; text-align: center; }
+#dl-banner b { color: #f0b37e; }
+table.grade { border-collapse: collapse; margin: 0.8em 0; width: 100%; max-width: 560px; font-size: 0.95em; }
+table.grade th { text-align: left; background: #eef1f6; padding: 6px 8px; }
+table.grade td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+table.grade tr.tot td { font-weight: 700; border-top: 2px solid var(--ink); }
+.gradebox { max-width: 560px; margin: 6vh auto 0; text-align: left; }
+.gradebox .big { font-size: 2.2em; font-weight: 800; margin: 0.2em 0; }

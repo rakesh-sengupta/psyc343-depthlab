@@ -1,22 +1,83 @@
 /**
- * Depth Lab -> Google Sheet (optional, for live class results)
+ * Depth Lab -> Google Sheet: live class results AND automatic grading.
  *
+ * SET-UP (once, ~5 minutes)
  * 1. Create a Google Sheet (e.g. "PSYC343 S09 Depth Lab").
  * 2. Extensions > Apps Script. Replace the code with this file. Save.
- * 3. Deploy > New deployment > type "Web app".
- *      Execute as: Me.   Who has access: Anyone.
+ * 3. Run the function `setup` once (Run button) and accept the permissions.
+ *    It creates the "Settings" and "Grades" tabs.
+ * 4. Deploy > New deployment > type "Web app". Execute as: Me. Who has access: Anyone.
  *    Copy the URL ending in /exec into web/js/config.js (sheets_url).
- * 4. Each finished phase adds ONE row (summary numbers + quiz score) to a tab
- *    called "Phase 1" ... "Phase 4". Full trial-by-trial data go to OSF via DataPipe.
+ *    (After editing this code later: Deploy > Manage deployments > edit > New version.)
  *
- * "Anyone" means anyone with the URL can append a row. The URL is not shown to
- * students, but treat the sheet as class data, not as a secure record.
+ * WHAT IT DOES
+ * - Each finished phase POSTs one summary row -> tab "Phase 1" ... "Phase 4".
+ * - After every row, the "Grades" tab is rebuilt: per roll number, the quiz marks of the
+ *   FIRST attempt at each phase, the total, marks out of `out_of`, percent and (optional) letter.
+ * - grade.html asks (GET ?roll=...&name=...) for one student's grade. It answers only if the
+ *   name matches the one recorded for that roll number, and only after `release_from`.
+ *
+ * SETTINGS tab (edit the values in column B):
+ *   release_from  blank = grades visible as soon as each phase is finished;
+ *                 or a date-time, e.g. 2026-11-06 13:00, to release after class.
+ *   items         graded questions per phase, e.g. 4,3,3,5
+ *   out_of        marks the quiz is worth (e.g. 10)
+ *   bands         optional letter grades, highest first, e.g. 90:A,80:A-,70:B,60:C,50:D,0:F
+ *   override      optional manual corrections, e.g. KREA1003=+1;KREA1010=-2 (questions)
+ *
+ * "Anyone" means anyone with the URL can append a row or look up a grade if they know a
+ * roll number AND the matching name. Treat this as a classroom tool, not a secure record:
+ * export the Grades tab to Canvas as the record of grades.
  */
+
+const DEFAULTS = [
+  ["release_from", "", "blank = immediately; or a date-time such as 2026-11-06 13:00"],
+  ["items", "4,3,3,5", "graded questions in phases 1,2,3,4"],
+  ["out_of", 10, "marks the quiz is worth"],
+  ["bands", "", "optional, e.g. 90:A,80:A-,70:B,60:C,50:D,0:F"],
+  ["override", "", "optional manual corrections, e.g. KREA1003=+1;KREA1010=-2"]
+];
+
+function setup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  settings_(ss);
+  rebuildGrades_(ss);
+}
+
+function norm_(s) { return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+function normName_(s) { return String(s || "").toLowerCase().replace(/[^a-z]/g, ""); }
+
+function settings_(ss) {
+  let sh = ss.getSheetByName("Settings");
+  if (!sh) {
+    sh = ss.insertSheet("Settings");
+    sh.getRange(1, 1, DEFAULTS.length, 3).setValues(DEFAULTS);
+    sh.getRange(1, 1, DEFAULTS.length, 1).setFontWeight("bold");
+    sh.getRange(1, 2, DEFAULTS.length, 1).setNumberFormat("@");   // keep text as typed
+    sh.autoResizeColumns(1, 3);
+  }
+  const v = {};
+  sh.getRange(1, 1, sh.getLastRow(), 2).getValues().forEach(r => { v[String(r[0]).trim()] = r[1]; });
+  const items = String(v.items || "4,3,3,5").split(",").map(x => Number(x.trim()) || 0);
+  const bands = String(v.bands || "").split(",").map(x => x.trim()).filter(Boolean)
+    .map(x => { const [m, l] = x.split(":"); return [Number(m), String(l || "").trim()]; })
+    .sort((a, b) => b[0] - a[0]);
+  const override = {};
+  String(v.override || "").split(";").map(x => x.trim()).filter(Boolean).forEach(x => {
+    const [r, d] = x.split("="); override[norm_(r)] = Number(d) || 0;
+  });
+  let release = null;
+  if (v.release_from instanceof Date) release = v.release_from;
+  else if (String(v.release_from || "").trim()) release = new Date(String(v.release_from).trim().replace(" ", "T"));
+  return { items, out_of: Number(v.out_of) || 10, bands, override, release };
+}
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const row = JSON.parse(e.postData.contents);
+    row.received = new Date();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const name = "Phase " + (row.phase || "?");
     const sh = ss.getSheetByName(name) || ss.insertSheet(name);
@@ -28,12 +89,77 @@ function doPost(e) {
       sh.setFrozenRows(1);
     }
     sh.appendRow(header.map(k => (row[k] === undefined || row[k] === null) ? "" : row[k]));
+    rebuildGrades_(ss);
     return ContentService.createTextOutput("ok");
   } finally {
     lock.releaseLock();
   }
 }
 
-function doGet() {
-  return ContentService.createTextOutput("Depth Lab sheet endpoint is running.");
+// Rebuild the Grades tab from the Phase tabs (first attempt per roll number per phase).
+function rebuildGrades_(ss) {
+  const S = settings_(ss);
+  const people = {};   // roll -> {roll, name, p:[...], attempts:[...]}
+  for (let ph = 1; ph <= 4; ph++) {
+    const sh = ss.getSheetByName("Phase " + ph);
+    if (!sh || sh.getLastRow() < 2) continue;
+    const vals = sh.getDataRange().getValues(), h = vals[0];
+    const iR = h.indexOf("roll"), iN = h.indexOf("name"), iC = h.indexOf("quiz_correct");
+    for (let r = 1; r < vals.length; r++) {
+      const roll = norm_(vals[r][iR]);
+      if (!roll) continue;
+      const p = people[roll] || (people[roll] = { roll: String(vals[r][iR]).trim(), name: vals[r][iN], p: [null, null, null, null], attempts: [0, 0, 0, 0] });
+      p.attempts[ph - 1]++;
+      if (p.p[ph - 1] === null) p.p[ph - 1] = Math.min(Number(vals[r][iC]) || 0, S.items[ph - 1]);   // first attempt only
+    }
+  }
+  const total = S.items.reduce((a, b) => a + b, 0);
+  const out = [["roll", "name", "phase1", "phase2", "phase3", "phase4", "adjust", "correct", "of", "marks", "out_of", "percent", "letter", "phases_done", "repeat_attempts"]];
+  Object.keys(people).sort().forEach(k => {
+    const p = people[k];
+    const adj = S.override[k] || 0;
+    const correct = Math.max(0, Math.min(total, p.p.reduce((a, b) => a + (b || 0), 0) + adj));
+    const percent = Math.round(1000 * correct / total) / 10;
+    const marks = Math.round(100 * S.out_of * correct / total) / 100;
+    const band = S.bands.find(b => percent >= b[0]);
+    out.push([p.roll, p.name].concat(p.p.map(x => x === null ? "" : x),
+      [adj || "", correct, total, marks, S.out_of, percent, band ? band[1] : "",
+       p.p.filter(x => x !== null).length, p.attempts.reduce((a, b) => a + Math.max(0, b - 1), 0)]));
+  });
+  const g = ss.getSheetByName("Grades") || ss.insertSheet("Grades");
+  g.clearContents();
+  g.getRange(1, 1, out.length, out[0].length).setValues(out);
+  g.getRange(1, 1, 1, out[0].length).setFontWeight("bold");
+  g.setFrozenRows(1);
+}
+
+function json_(o) {
+  return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// grade.html: GET ?roll=...&name=...
+function doGet(e) {
+  const roll = norm_(e && e.parameter.roll), name = normName_(e && e.parameter.name);
+  if (!roll) return json_({ status: "info", message: "Depth Lab grade service is running." });
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const S = settings_(ss);
+  if (S.release && new Date() < S.release) {
+    return json_({ status: "not_released", release_from: Utilities.formatDate(S.release, Session.getScriptTimeZone(), "d MMM yyyy, HH:mm") });
+  }
+  const g = ss.getSheetByName("Grades");
+  if (!g || g.getLastRow() < 2) return json_({ status: "none", message: "No grades recorded yet." });
+  const vals = g.getDataRange().getValues(), h = vals[0], col = (k) => h.indexOf(k);
+  const row = vals.slice(1).find(r => norm_(r[col("roll")]) === roll);
+  if (!row || normName_(row[col("name")]) !== name) {
+    return json_({ status: "none", message: "No record matches that roll number and name. Use the name exactly as you typed it in class." });
+  }
+  const phases = {};
+  for (let ph = 1; ph <= 4; ph++) phases[ph] = row[col("phase" + ph)];
+  return json_({
+    status: "ok", phases,
+    correct: row[col("correct")], total: row[col("of")], marks: row[col("marks")], out_of: row[col("out_of")],
+    percent: row[col("percent")], letter: row[col("letter")], bands: S.bands,
+    note: (row[col("phases_done")] < 4 ? "Phases not recorded count as 0. If you missed a phase for a valid reason, contact the instructor." : "")
+      + (row[col("adjust")] ? " Includes a manual adjustment by the instructor." : "")
+  });
 }

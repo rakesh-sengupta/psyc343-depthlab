@@ -72,14 +72,21 @@ DL.canvasTrial = (opts) => ({
 // ------------------------------------------------------- quiz questions
 // q = {id, text, options:[...], answer: index, explain: string|function}
 DL.quiz = (q) => {
+  // Options are shuffled for each student, so "the answer is the second one" cannot be passed on.
+  let order = null;
   const ask = {
     type: jsPsychHtmlButtonResponse,
-    stimulus: () => `<div class="qbox"><div class="qtag">Quiz</div><p class="qtext">${typeof q.text === "function" ? q.text() : q.text}</p></div>`,
-    choices: q.options,
+    stimulus: () => `<div class="qbox"><div class="qtag">Graded quiz &middot; 1 mark</div><p class="qtext">${typeof q.text === "function" ? q.text() : q.text}</p></div>`,
+    choices: () => { order = DL.shuffle(q.options.map((_, i) => i)); DL.lastOrder = order; return order.map(i => q.options[i]); },
     button_layout: "flex",
     button_html: DL.btn("opt"),
     data: { task: "quiz", qid: q.id, answer: q.answer },
-    on_finish: (d) => { d.correct = d.response === q.answer; d.chosen = q.options[d.response]; }
+    on_finish: (d) => {
+      d.option_order = order.join(" ");
+      d.chosen_index = order[d.response];
+      d.correct = d.chosen_index === q.answer;
+      d.chosen = q.options[d.chosen_index];
+    }
   };
   const feedback = {
     type: jsPsychHtmlButtonResponse,
@@ -87,7 +94,7 @@ DL.quiz = (q) => {
       const last = jsPsych.data.get().last(1).values()[0];
       const ok = last.correct;
       const ex = typeof q.explain === "function" ? q.explain() : q.explain;
-      return `<div class="qbox ${ok ? "good" : "bad"}"><div class="qtag">${ok ? "Correct" : "Not quite"}</div>
+      return `<div class="qbox ${ok ? "good" : "bad"}"><div class="qtag">${ok ? "Correct: +1 mark" : "Not quite: 0 marks"}</div>
         <p class="qtext">${typeof q.text === "function" ? q.text() : q.text}</p>
         <p><b>Answer:</b> ${q.options[q.answer]}</p><p class="explain">${ex}</p></div>`;
     },
@@ -95,6 +102,37 @@ DL.quiz = (q) => {
     data: { task: "quiz_feedback", qid: q.id }
   };
   return { timeline: [ask, feedback] };
+};
+
+// ------------------------------------------------------------- grading
+// Provisional grade on this device; the official one comes from the Sheet (grade.html).
+DL.grade = {};
+DL.grade.key = (roll) => "res_" + DL.norm(roll);
+DL.grade.load = (roll) => { try { return JSON.parse(DL.store.get(DL.grade.key(roll)) || "{}"); } catch (e) { return {}; } };
+DL.grade.record = (roll, phase, correct, total) => {
+  const r = DL.grade.load(roll);
+  const first = !r[phase];
+  if (first) r[phase] = { correct, total, at: new Date().toISOString() };
+  else r[phase].retries = (r[phase].retries || 0) + 1;
+  DL.store.set(DL.grade.key(roll), JSON.stringify(r));
+  return first;
+};
+// rec: {phase: {correct}} -> {correct, total, marks, percent, letter}
+DL.grade.compute = (rec, G) => {
+  G = G || CFG.grading;
+  const total = Object.values(G.items).reduce((a, b) => a + b, 0);
+  const correct = Object.keys(G.items).reduce((a, k) => a + (rec[k] ? Number(rec[k].correct) : 0), 0);
+  const percent = total ? Math.round(1000 * correct / total) / 10 : 0;
+  const marks = Math.round(100 * G.out_of * correct / total) / 100;
+  const band = (G.bands || []).find(([min]) => percent >= min);
+  return { correct, total, marks, percent, letter: band ? band[1] : "" };
+};
+DL.grade.table = (rec, official) => {
+  const G = CFG.grading, g = DL.grade.compute(rec);
+  const rows = Object.keys(G.items).map(k => `<tr><td>Phase ${k}</td><td>${rec[k] ? rec[k].correct : "&ndash;"} / ${G.items[k]}</td>
+     <td class="small">${rec[k] ? (rec[k].retries ? "first attempt counts" : "") : "not done yet"}</td></tr>`).join("");
+  return `<table class="grade"><tr><th colspan="3">${official ? "Official grade" : "Your quiz so far (provisional: phases done on this device)"}</th></tr>${rows}
+    <tr class="tot"><td>Total</td><td>${g.correct} / ${g.total}</td><td>${g.marks} / ${G.out_of} marks &middot; ${g.percent}%${g.letter ? " &middot; " + g.letter : ""}</td></tr></table>`;
 };
 
 // Ungraded prediction: recorded, compared with the data later.
@@ -127,7 +165,7 @@ DL.bars = (bars, opts) => {
           <text x="${padL - 4}" y="${y(v) + 4}" text-anchor="end" class="ax">${Math.round(v)}${opts.unit}</text>`;
   });
   if (opts.ref != null) s += `<line x1="${padL}" x2="${W - 6}" y1="${y(opts.ref)}" y2="${y(opts.ref)}" class="ref"/>
-      <text x="${W - 8}" y="${y(opts.ref) - 4}" text-anchor="end" class="reft">${opts.refLabel || ""}</text>`;
+      <text x="${padL + 4}" y="${y(opts.ref) - 4}" text-anchor="start" class="reft">${opts.refLabel || ""}</text>`;
   bars.forEach((b, i) => {
     const x = padL + i * bw + bw * 0.18, w = bw * 0.64;
     if (b.value == null) {
@@ -155,8 +193,9 @@ DL.loginTrial = () => {
         <label>Full name<input name="name" required autocomplete="name" value="${DL.esc(DL.store.get("name"))}"></label>
         <label>Roll number<input name="roll" required value="${DL.esc(DL.store.get("roll"))}"></label>
         <label>Unlock code (on the slide)<input name="code" required autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
-        <label class="check"><input type="checkbox" name="ok" required> I understand that my answers are recorded for class discussion and
-          participation, and that the demos are not a test of my eyesight.</label>
+        <label class="check"><input type="checkbox" name="ok" required> I understand that today's class is also a <b>graded quiz</b>:
+          the quiz questions in each phase are marked automatically (first attempt only). My experiment answers are recorded
+          for class discussion but are never marked, and the demos are not a test of my eyesight.</label>
       </div>`,
     button_label: "Start",
     data: { task: "login" },
@@ -179,10 +218,18 @@ DL.loginTrial = () => {
           touch: ("ontouchstart" in window) ? 1 : 0
         });
         d.phase = DL.state.phase;
+        DL.banner();
       }
     }
   };
   return { timeline: [form], loop_function: (data) => !data.values()[0].code_ok };
+};
+
+DL.banner = () => {
+  let b = document.getElementById("dl-banner");
+  if (!b) { b = document.createElement("div"); b.id = "dl-banner"; document.body.prepend(b); }
+  const n = CFG.grading.items[DL.state.phase];
+  b.innerHTML = `Session 9 &middot; <b>class and graded quiz in progress</b> &middot; Phase ${DL.state.phase} of 4 (${n} graded questions) &middot; ${DL.esc(DL.state.roll)}`;
 };
 
 // --------------------------------------------------------------- saving
@@ -199,11 +246,16 @@ DL.saveTrial = (summaryFn) => ({
     const stem = DL.fileStem();
     DL.state.stem = stem;
     const csv = DL.phaseData().csv();
+    const quiz = DL.task("quiz");
+    const qc = quiz.filter(r => r.correct).length;
+    const firstAttempt = DL.grade.record(DL.state.roll, DL.state.phase, qc, quiz.length);
+    DL.state.firstAttempt = firstAttempt;
     const summary = Object.assign({
       session: CFG.session, phase: DL.state.phase, name: DL.state.name, roll: DL.state.roll,
       finished: new Date().toISOString(),
-      quiz_correct: DL.task("quiz").filter(r => r.correct).length,
-      quiz_total: DL.task("quiz").length
+      quiz_correct: qc, quiz_total: quiz.length,
+      quiz_items: quiz.map(r => `${r.qid}=${r.correct ? 1 : 0}`).join(";"),
+      first_attempt_on_device: firstAttempt ? 1 : 0
     }, summaryFn ? summaryFn() : {});
     DL.state.summary = summary;
     const jobs = [];
@@ -245,7 +297,11 @@ DL._endTrial = (resultsHtml, nextText) => ({
   stimulus: () => `<div class="results">
       <h2>Phase ${DL.state.phase} done, ${DL.esc(DL.state.name.split(" ")[0])}</h2>
       ${DL.saveStatusHtml()}
-      <p class="score">Quiz: ${DL.state.summary.quiz_correct} / ${DL.state.summary.quiz_total}</p>
+      <p class="score">This phase's quiz: ${DL.state.summary.quiz_correct} / ${DL.state.summary.quiz_total} marks</p>
+      ${DL.state.firstAttempt ? "" : `<p class="warn">You have done this phase before on this device: only your first attempt counts towards your grade.</p>`}
+      ${DL.grade.table(DL.grade.load(DL.state.roll), false)}
+      <p class="small">Your official grade is calculated automatically from the class records. Check it after class at
+        <a href="grade.html" target="_blank">the grade page</a> (roll number + name).</p>
       ${resultsHtml()}
       <p class="next">${nextText}</p>
     </div>`,
