@@ -239,52 +239,82 @@ DL.fileStem = () => {
   return `${CFG.session}_P${DL.state.phase}_${clean(DL.state.roll)}_${clean(DL.state.name)}_${ts}`;
 };
 
+// The phase's data as CSV (the long 'stimulus' HTML column is left out to keep files small).
+DL.phaseCSV = () => DL.phaseData().ignore("stimulus").csv();
+
+// Send one submission to the Apps Script. Resolves to {ok, confirmed, msg}.
+// 1) normal request: the script's JSON reply confirms the save;
+// 2) if the browser blocks reading the reply, send it "blind" (no-cors) and keep a copy to re-send later.
+DL.send = async (payload) => {
+  const body = JSON.stringify(payload);
+  try {
+    const r = await fetch(CFG.sheets_url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body });
+    const j = await r.json();
+    if (j && j.status === "ok") return { ok: true, confirmed: true, msg: "" };
+    return { ok: false, confirmed: false, msg: (j && j.message) || "the server refused the data" };
+  } catch (e) {
+    try {
+      await fetch(CFG.sheets_url, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" }, body });
+      return { ok: true, confirmed: false, msg: "sent, not yet confirmed" };
+    } catch (e2) {
+      return { ok: false, confirmed: false, msg: "no connection" };
+    }
+  }
+};
+DL.pending = {
+  load() { try { return JSON.parse(DL.store.get("pending") || "[]"); } catch (e) { return []; } },
+  save(a) { DL.store.set("pending", JSON.stringify(a)); },
+  add(p) { const a = DL.pending.load().filter(x => x.sub_id !== p.sub_id); p.tries = p.tries || 0; a.push(p); DL.pending.save(a); },
+  remove(id) { DL.pending.save(DL.pending.load().filter(x => x.sub_id !== id)); }
+};
+// Re-send anything left over from an earlier failed or unconfirmed upload (called when a page opens).
+DL.flushPending = async () => {
+  if (!CFG.sheets_url) return;
+  for (const p of DL.pending.load()) {
+    const r = await DL.send(p);
+    if (r.confirmed || ++p.tries >= 6) DL.pending.remove(p.sub_id);
+    else DL.pending.add(p);
+  }
+};
+
 DL.saveTrial = (summaryFn) => ({
   type: jsPsychCallFunction,
   async: true,
   func: (done) => {
     const stem = DL.fileStem();
     DL.state.stem = stem;
-    const csv = DL.phaseData().csv();
     const quiz = DL.task("quiz");
     const qc = quiz.filter(r => r.correct).length;
     const firstAttempt = DL.grade.record(DL.state.roll, DL.state.phase, qc, quiz.length);
     DL.state.firstAttempt = firstAttempt;
+    const sub_id = stem + "_" + Math.random().toString(36).slice(2, 8);
     const summary = Object.assign({
-      session: CFG.session, phase: DL.state.phase, name: DL.state.name, roll: DL.state.roll,
+      sub_id, session: CFG.session, phase: DL.state.phase, name: DL.state.name, roll: DL.state.roll,
       finished: new Date().toISOString(),
       quiz_correct: qc, quiz_total: quiz.length,
       quiz_items: quiz.map(r => `${r.qid}=${r.correct ? 1 : 0}`).join(";"),
       first_attempt_on_device: firstAttempt ? 1 : 0
     }, summaryFn ? summaryFn() : {});
     DL.state.summary = summary;
-    const jobs = [];
-    if (CFG.datapipe_id) {
-      jobs.push(jsPsychPipe.saveData(CFG.datapipe_id, stem + ".csv", csv)
-        .then(r => ({ where: "OSF (DataPipe)", ok: r && !r.error, msg: r && r.error ? String(r.error) : "" }))
-        .catch(e => ({ where: "OSF (DataPipe)", ok: false, msg: String(e) })));
-    }
-    if (CFG.sheets_url) {
-      // no-cors: the request is sent but the reply cannot be read, so success is assumed if no network error.
-      jobs.push(fetch(CFG.sheets_url, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(summary) })
-        .then(() => ({ where: "Google Sheet", ok: true, msg: "" }))
-        .catch(e => ({ where: "Google Sheet", ok: false, msg: String(e) })));
-    }
-    const timeout = new Promise(res => setTimeout(() => res([{ where: "upload", ok: false, msg: "timed out" }]), 15000));
-    Promise.race([Promise.all(jobs), timeout]).then(res => {
-      DL.state.saveStatus = res;
-      done({ task: "save", save_status: JSON.stringify(res) });
+    if (!CFG.sheets_url) { DL.state.saveStatus = []; done({ task: "save", save_status: "not configured" }); return; }
+    const payload = { sub_id, filename: stem + ".csv", csv: DL.phaseCSV(), summary };
+    DL.pending.add(payload);                       // kept until the server confirms
+    const timeout = new Promise(res => setTimeout(() => res({ ok: false, confirmed: false, msg: "timed out (will retry)" }), 20000));
+    Promise.race([DL.send(payload), timeout]).then(r => {
+      if (r.confirmed) DL.pending.remove(sub_id);
+      DL.state.saveStatus = [Object.assign({ where: "class records" }, r)];
+      done({ task: "save", save_status: JSON.stringify(r) });
     });
   }
 });
 
 DL.saveStatusHtml = () => {
-  const st = DL.state.saveStatus || [];
-  if (!st.length) return `<p class="warn">Nothing was uploaded automatically. <b>Download your data</b> below and upload the file to Canvas.</p>`;
-  const bad = st.filter(s => !s.ok);
-  if (!bad.length) return `<p class="ok">Your answers were saved (${st.map(s => s.where).join(" and ")}).</p>`;
-  return `<p class="warn">Saving failed (${bad.map(s => s.where + (s.msg ? ": " + DL.esc(s.msg) : "")).join("; ")}).
-          <b>Download your data</b> below and upload the file to Canvas.</p>`;
+  const st = (DL.state.saveStatus || [])[0];
+  if (!st) return `<p class="warn">Automatic saving is not set up. <b>Download your data</b> below and upload the file to Canvas.</p>`;
+  if (st.confirmed) return `<p class="ok">Your answers and quiz marks were saved to the class records.</p>`;
+  if (st.ok) return `<p class="ok">Your answers were sent. This device keeps a copy and will re-send it automatically if needed.</p>`;
+  return `<p class="warn">Saving did not work yet (${DL.esc(st.msg)}). Your answers are kept on this device and will be re-sent when you
+          open the lab again. To be safe, also <b>download your data</b> below and keep the file.</p>`;
 };
 
 // Final screen of a phase: personal results + download button + "look up".
@@ -312,7 +342,7 @@ DL._endTrial = (resultsHtml, nextText) => ({
   // keep the screen up after a download
 });
 DL.download = () => {
-  const csv = DL.phaseData().csv();
+  const csv = DL.phaseCSV();
   const blob = new Blob([csv], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);

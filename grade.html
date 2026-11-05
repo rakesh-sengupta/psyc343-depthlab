@@ -22,6 +22,7 @@
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
+DL.flushPending();
 $("roll").value = DL.store.get("roll"); $("name").value = DL.store.get("name");
 const local = (roll) => {
   const rec = DL.grade.load(roll);

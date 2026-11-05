@@ -12,7 +12,6 @@
   <script src="lib/plugin-html-slider-response.js"></script>
   <script src="lib/plugin-survey-html-form.js"></script>
   <script src="lib/plugin-call-function.js"></script>
-  <script src="lib/plugin-pipe.js"></script>
   <script src="js/config.js"></script>
   <script src="js/common.js"></script>
   <script src="js/stim.js"></script>
@@ -39,6 +38,7 @@
   const phases = { 1: P1, 2: P2, 3: P3, 4: P4 };
   const timeline = [DL.loginTrial()];
   [1, 2, 3, 4].forEach(k => timeline.push({ timeline: phases[k].timeline(), conditional_function: () => DL.state.phase === k }));
+  DL.flushPending();          // re-send anything an earlier phase could not save
   jsPsych.run(timeline);
 </script>
 </body>

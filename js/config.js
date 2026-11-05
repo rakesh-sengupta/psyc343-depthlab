@@ -16,18 +16,17 @@ window.DEPTHLAB_CONFIG = {
   },
 
   // ---------------- where the data go ----------------
-  // (a) DataPipe -> OSF  (recommended: full trial-by-trial CSV per student per phase)
-  //     Create an experiment at https://pipe.jspsych.org, link it to a PRIVATE OSF
-  //     project, switch "data collection" on, and paste the 12-character ID here.
-  datapipe_id: "",
+  // One Google Apps Script web app (apps-script/Code.gs, bound to a Google Sheet) receives
+  // everything when a student finishes a phase:
+  //   - the full trial-by-trial CSV  -> a file in a Google Drive folder (one per student per phase)
+  //   - a one-row summary            -> tab "Phase 1" ... "Phase 4" (live class results)
+  //   - the quiz marks               -> tab "Grades" (automatic grading; grade.html reads it)
+  // Deploy the script as a web app and paste its URL (ending in /exec) here.
+  sheets_url: "https://script.google.com/macros/s/AKfycbySbqCl8FQBDYk84L0u5MEwfky22B2Jqx63WVZOExLc9jcBGeEWwWIj8iGdG38DYSTpcA/exec",
 
-  // (b) Google Sheet (optional: one summary row per student per phase, live during class)
-  //     Deploy apps-script/Code.gs as a web app and paste its /exec URL here.
-  sheets_url: "",
-
-  // Students can always download their own CSV at the end of each phase.
-  // If neither (a) nor (b) is set, that download is the only copy, so ask them
-  // to upload it to Canvas.
+  // Students can always download their own CSV at the end of each phase. If the upload fails,
+  // the lab keeps the submission on the device and re-sends it automatically the next time
+  // the page is opened (the script ignores duplicates).
 
   // ---------------- grading ----------------
   // Only the quiz questions are graded (1 mark each, first attempt only).

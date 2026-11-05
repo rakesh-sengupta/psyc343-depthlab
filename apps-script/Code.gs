@@ -1,33 +1,40 @@
 /**
- * Depth Lab -> Google Sheet: live class results AND automatic grading.
+ * Depth Lab -> Google Sheet + Google Drive: data collection, live class results AND automatic grading.
  *
  * SET-UP (once, ~5 minutes)
  * 1. Create a Google Sheet (e.g. "PSYC343 S09 Depth Lab").
  * 2. Extensions > Apps Script. Replace the code with this file. Save.
- * 3. Run the function `setup` once (Run button) and accept the permissions.
- *    It creates the "Settings" and "Grades" tabs.
+ * 3. Run the function `setup` once (Run button) and accept the permissions (Sheets + Drive).
+ *    It creates the "Settings" and "Grades" tabs and a Drive folder for the data files;
+ *    the folder's link is written into the Settings tab.
  * 4. Deploy > New deployment > type "Web app". Execute as: Me. Who has access: Anyone.
  *    Copy the URL ending in /exec into web/js/config.js (sheets_url).
- *    (After editing this code later: Deploy > Manage deployments > edit > New version.)
+ *    (After editing this code later: Deploy > Manage deployments > edit > Version: New version.)
  *
- * WHAT IT DOES
- * - Each finished phase POSTs one summary row -> tab "Phase 1" ... "Phase 4".
- * - After every row, the "Grades" tab is rebuilt: per roll number, the quiz marks of the
- *   FIRST attempt at each phase, the total, marks out of `out_of`, percent and (optional) letter.
- * - grade.html asks (GET ?roll=...&name=...) for one student's grade. It answers only if the
- *   name matches the one recorded for that roll number, and only after `release_from`.
+ * WHAT IT DOES, each time a student finishes a phase (one POST):
+ * - saves the full trial-by-trial CSV as a file in the Drive data folder,
+ *     S09_P<phase>_<roll>_<name>_<timestamp>.csv
+ * - appends one summary row (results + quiz marks + link to the file) to tab "Phase <n>",
+ * - rebuilds the "Grades" tab: per roll number, the quiz marks of the FIRST attempt at each
+ *   phase, the total, marks out of `out_of`, percent and (optional) letter,
+ * - replies {"status":"ok"} so the student's screen can confirm the save.
+ * Submissions carry an id; a re-sent duplicate is recognised and not stored twice.
+ *
+ * grade.html asks (GET ?roll=...&name=...) for one student's grade. It answers only if the
+ * name matches the one recorded for that roll number, and only after `release_from`.
  *
  * SETTINGS tab (edit the values in column B):
  *   release_from  blank = grades visible as soon as each phase is finished;
- *                 or a date-time, e.g. 2026-11-06 13:00, to release after class.
+ *                 or a date-time, e.g. 2026-11-06 18:00, to release after class.
  *   items         graded questions per phase, e.g. 4,3,3,5
  *   out_of        marks the quiz is worth (e.g. 10)
  *   bands         optional letter grades, highest first, e.g. 90:A,80:A-,70:B,60:C,50:D,0:F
  *   override      optional manual corrections, e.g. KREA1003=+1;KREA1010=-2 (questions)
+ *   data_folder   (filled in by setup) link to the Drive folder with the CSV files
  *
- * "Anyone" means anyone with the URL can append a row or look up a grade if they know a
- * roll number AND the matching name. Treat this as a classroom tool, not a secure record:
- * export the Grades tab to Canvas as the record of grades.
+ * "Anyone" means anyone with the URL can submit data or look up a grade if they know a roll
+ * number AND the matching name. Treat this as a classroom tool, not a secure record: keep the
+ * Sheet and the folder private, and export the Grades tab to Canvas as the record of grades.
  */
 
 const DEFAULTS = [
@@ -35,13 +42,35 @@ const DEFAULTS = [
   ["items", "4,3,3,5", "graded questions in phases 1,2,3,4"],
   ["out_of", 10, "marks the quiz is worth"],
   ["bands", "", "optional, e.g. 90:A,80:A-,70:B,60:C,50:D,0:F"],
-  ["override", "", "optional manual corrections, e.g. KREA1003=+1;KREA1010=-2"]
+  ["override", "", "optional manual corrections, e.g. KREA1003=+1;KREA1010=-2"],
+  ["data_folder", "", "filled in by setup: the Drive folder that receives the CSV files"]
 ];
+const FOLDER_NAME = "PSYC343 S09 Depth Lab data";
 
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   settings_(ss);
+  folder_(ss);
   rebuildGrades_(ss);
+}
+
+// The Drive folder for the CSV files (created on first use; its id is kept in the script properties).
+function folder_(ss) {
+  const props = PropertiesService.getScriptProperties();
+  let f = null;
+  const id = props.getProperty("DATA_FOLDER_ID");
+  if (id) { try { f = DriveApp.getFolderById(id); } catch (e) { f = null; } }
+  if (!f) {
+    f = DriveApp.createFolder(FOLDER_NAME);
+    props.setProperty("DATA_FOLDER_ID", f.getId());
+    const sh = ss.getSheetByName("Settings");
+    if (sh) {
+      const vals = sh.getRange(1, 1, sh.getLastRow(), 1).getValues();
+      const r = vals.findIndex(v => v[0] === "data_folder");
+      if (r >= 0) sh.getRange(r + 1, 2).setValue(f.getUrl());
+    }
+  }
+  return f;
 }
 
 function norm_(s) { return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); }
@@ -74,14 +103,26 @@ function settings_(ss) {
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
+  lock.waitLock(25000);
   try {
-    const row = JSON.parse(e.postData.contents);
+    const body = JSON.parse(e.postData.contents);
+    const row = body.summary || body;               // older clients sent only the summary
     row.received = new Date();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    settings_(ss);
     const name = "Phase " + (row.phase || "?");
     const sh = ss.getSheetByName(name) || ss.insertSheet(name);
     let header = sh.getLastRow() ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0] : [];
+    // duplicate? (the same submission re-sent after a network problem)
+    const iId = header.indexOf("sub_id");
+    if (row.sub_id && iId >= 0 && sh.getLastRow() > 1) {
+      const ids = sh.getRange(2, iId + 1, sh.getLastRow() - 1, 1).getValues().map(r => r[0]);
+      if (ids.indexOf(row.sub_id) >= 0) return json_({ status: "ok", duplicate: true });
+    }
+    if (body.csv) {
+      const fname = String(body.filename || (row.sub_id || "submission") + ".csv").replace(/[^A-Za-z0-9._-]/g, "_");
+      row.data_file = folder_(ss).createFile(fname, body.csv, MimeType.CSV).getUrl();
+    }
     const extra = Object.keys(row).filter(k => header.indexOf(k) < 0);
     if (extra.length) {
       header = header.concat(extra);
@@ -90,7 +131,9 @@ function doPost(e) {
     }
     sh.appendRow(header.map(k => (row[k] === undefined || row[k] === null) ? "" : row[k]));
     rebuildGrades_(ss);
-    return ContentService.createTextOutput("ok");
+    return json_({ status: "ok", duplicate: false, saved_file: !!body.csv });
+  } catch (err) {
+    return json_({ status: "error", message: String(err) });
   } finally {
     lock.releaseLock();
   }
